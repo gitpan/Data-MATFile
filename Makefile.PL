@@ -13,6 +13,8 @@ WriteMakefile (
     AUTHOR => 'Ben Bullock <bkb@cpan.org>',
     LICENSE => 'perl',
     PREREQ_PM => {
+	# This is needed for MAT-Files which are compressed.
+	'IO::Uncompress::Gunzip' => 0,
     },
     META_MERGE => {
         resources => {
@@ -23,4 +25,5 @@ WriteMakefile (
     EXE_FILES => [
         "script/mat2json",
     ],
+    MIN_PERL_VERSION => '5.008001',
 );

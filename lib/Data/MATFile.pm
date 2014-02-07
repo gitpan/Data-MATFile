@@ -4,9 +4,10 @@ require Exporter;
 @EXPORT_OK = qw/read_matfile mi2word mx2word/;
 use warnings;
 use strict;
-#use 5.010;
+use 5.008;
 use Carp;
-our $VERSION = 0.01;
+our $VERSION = 0.02;
+use IO::Uncompress::Gunzip qw/gunzip $GunzipError/;
 
 # Nasty flag for debuggers
 
@@ -122,9 +123,8 @@ sub read_matfile
     $obj->read_file_header ();
 
     again:
-    my $matrix = $obj->read_matrix ();
-    if ($matrix) {
-        $obj->{data}->{$matrix->{name}} = $matrix;
+    my $ok = $obj->read_object ();
+    if ($ok) {
         goto again;
     }
 
@@ -271,27 +271,57 @@ sub set_endianness
     return;
 }
 
+sub set_data
+{
+    my ($obj, $data) = @_;
+    $obj->{input_data} = $data;
+}
+
 # Data-reading functions
 
-=head2 read_matrix
+=head2 read_object
 
-    my $array = $obj->read_matrix ();
+    my $array = $obj->read_object ();
 
-Parse a matrix substructure.
+Read an object from the file.
 
 =cut
 
-sub read_matrix
+sub read_object
 {
     my ($obj) = @_;
     die "bad call" if wantarray != 0;
     my ($type, $n_bytes, $data) = $obj->read_data_header ();
     if ($obj->{eof}) {
-        return;
+        return undef;
     }
-    if ($type != miMATRIX) {
-        $obj->error ("cannot handle non-matrix data here");
+    if ($type == miCOMPRESSED) {
+	print "Oh, you have $n_bytes of data.\n";
+	my $cdata = $obj->read_bytes ($n_bytes);
+	gunzip \$cdata, \my $uncdata
+	    or $obj->error ("gunzip failed: $GunzipError");
+	$obj->set_data ($uncdata);
+	print "Read again as uncompressed.\n";
+	my $value = $obj->read_object ();
+	$obj->set_data (undef);
+	return $value;
     }
+    elsif ($type == miMATRIX) {
+	return $obj->read_matrix ($n_bytes, $data);
+    }
+    else {
+	my $name = $names{$type};
+	if (! defined $name) {
+	    $name = 'unknown';
+	}
+        $obj->error ("cannot handle non-matrix data of type $name here");
+    }
+    return undef;
+}
+
+sub read_matrix
+{
+    my ($obj, $n_bytes, $data) = @_;
     if ($obj->{verbose}) {
         print <<'EOF';
                            
@@ -357,6 +387,7 @@ EOF
     if (! defined $matrix->{array}) {
         die "error: empty data section of matrix";
     }
+    $obj->{data}->{$matrix->{name}} = $matrix;
     return $matrix;
 }
 
@@ -485,6 +516,7 @@ sub read_field_names
     my @names;
     for (1..$n_names) {
         my $name = $obj->read_bytes ($field_name_length);
+        $name = unpack ("A*", $name);
         if ($obj->{verbose}) {
             print "Name: \"$name\"\n";
         }
@@ -704,10 +736,39 @@ This converts the MAT-File double (eight bytes, the IEEE 754 "double
 
 =cut
 
+# http://www.perlmonks.org/bare/?node_id=703222
+
+sub double_from_hex { unpack 'd', scalar reverse pack 'H*', $_[0] }
+
+use constant POS_INF => double_from_hex '7FF0000000000000';
+use constant NEG_INF => double_from_hex 'FFF0000000000000';
+use constant NaN     => double_from_hex '7FF8000000000000';
+
 sub parse_double
 {
     my ($bytes) = @_;
     my ($bottom, $top) = unpack ("LL", $bytes);
+    # Reference:
+    # http://en.wikipedia.org/wiki/Double_precision_floating-point_format
+
+    # Eight zero bytes represents 0.0.
+    if ($bottom == 0) {
+        if ($top == 0) {
+            return 0;
+        }
+        elsif ($top == 0x80000000) {
+            return -0;
+        }
+        elsif ($top == 0x7ff00000) {
+            return POS_INF;
+        }
+        elsif ($top == 0xfff00000) {
+            return NEG_INF;
+        }
+    }
+    elsif ($top == 0x7ff00000) {
+        return NaN;
+    }
     my $sign = $top >> 31;
 #    print "$sign\n";
     my $exponent = (($top >> 20) & 0x7FF) - 1023;
@@ -792,6 +853,9 @@ Read an eight-byte data header from the file and parse it.
 sub read_data_header
 {
     my ($obj) = @_;
+    if ($obj->{verbose}) {
+	print "Reading data header.\n";
+    }
     my $h = $obj->read_bytes (8);
     if ($obj->{eof}) {
         return;
@@ -819,6 +883,9 @@ Format piece of data, so the data will need to be read separately.
 sub parse_data_header
 {
     my ($obj, $h) = @_;
+    if ($obj->{verbose}) {
+	print "Parsing data header.\n";
+    }
     if (length $h != 8) {
         $obj->error ("Bad length " . (length $h) . " for data header");
     }
@@ -871,7 +938,7 @@ sub read_bytes
     }
     if ($obj->{verbose}) {
         if ($no_pad) {
-            print "Not padding to eight-byte boundary";
+            print "Not padding to eight-byte boundary.\n";
         }
     }
     my $padded;
@@ -880,15 +947,30 @@ sub read_bytes
         $nbytes += (8 - $n % 8);
         $padded = 1;
     }
-    my $nread = read ($obj->{fh}, $r, $nbytes);
-    if (! defined $nread) {
-        $obj->error ("could not read $n bytes: $!");
+
+    # Read from uncompressed data if available.
+
+    if ($obj->{input_data}) {
+	print "Reading $nbytes ($n) from uncompressed data.\n";
+	my $has = length ($obj->{input_data});
+	if ($nbytes > $has) {
+	    $obj->error ("Cannot read $nbytes, only have $has left");
+	}
+	$r = substr ($obj->{input_data}, 0, $nbytes);
+	# Remove $nbytes bytes from input_data.
+	$obj->{input_data} = substr ($obj->{input_data}, $nbytes);
     }
-    if ($nread == 0) {
-        $obj->{eof} = 1;
-    }
-    elsif ($nread != $nbytes) {
-        $obj->error ("Tried to read $n bytes and got $nread");
+    else {
+	my $nread = read ($obj->{fh}, $r, $nbytes);
+	if (! defined $nread) {
+	    $obj->error ("could not read $n bytes: $!");
+	}
+	if ($nread == 0) {
+	    $obj->{eof} = 1;
+	}
+	elsif ($nread != $nbytes) {
+	    $obj->error ("Tried to read $n bytes and got $nread");
+	}
     }
     # If the read data is padded, chop off the padding.
     if ($padded) {

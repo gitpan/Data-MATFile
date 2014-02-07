@@ -10,3 +10,5 @@ t/data\.mat
 guff.*
 mat-examples\.txt
 lib/Data/MATFile\.pod\.tmpl
+^[^/]+\.mat$
+^runc\.pl$

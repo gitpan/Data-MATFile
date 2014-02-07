@@ -5,6 +5,11 @@ Data::MATFile - read MATLAB MAT-File data
 =head1 SYNOPSIS
 
     use Data::MATFile qw/read_matfile/;
+    my $matfile = read_matfile ('some.mat');
+    # Get a matrix named "xyz":
+    my $matrix = $matfile->{data}->{xyz};
+    # Get values from it
+    my $value = $matrix->{array}->[0][1];
 
 =head1 DESCRIPTION
 
@@ -17,7 +22,13 @@ MATLAB and Octave.
 
     my $matfile = read_matfile ('something.mat');
 
+This reads the entire file, converts it into Perl variables, and
+returns the result as a hash reference.
+
 =head3 Keys and values of returned hash
+
+This section lists the keys and the corresponding values of the
+returned hash.
 
 =over
 
@@ -66,10 +77,14 @@ a multidimensional matrix. For the case of structure data, this is
 stored as a hash reference, with the hash keys being the field names,
 and the corresponding hash values being the fields.
 
+The array is indexed Perl-style rather than MATLAB-style, so the
+indices run from I<0> to I<n - 1>, where I<n> is the dimension of the
+matrix.
+
 =item class
 
-The class of the array, as a MATLAB constant. This can be converted
-into a string using L</mx2word>.
+The class of the array, as a number, which is equal to the MATLAB
+constant. This can be converted into a string using L</mx2word>.
 
 =item dimensions
 
@@ -154,6 +169,13 @@ correct binary format.
 L<mat2json> - This script, provided with the distribution, converts a
 MAT-File into JSON format.
 
+L<https://github.com/jlapeyre/PDL-IO-Matlab> - This Perl module
+converts between the PDL (Perl Data Language) format and MATLAB files
+via the Matio C library.
+
+L<http://matio.sourceforge.net/> - The MAT File I/O Library. This is a
+C library for reading and writing MAT-Files.
+
 =head1 REFERENCES
 
 The MATLAB MAT-File Format is described in
@@ -168,7 +190,8 @@ Ben Bullock, <bkb@cpan.org>
 
 =head1 COPYRIGHT & LICENCE
 
-This package and associated files are copyright (C) 2012 Ben Bullock.
+This package and associated files are copyright (C) 2012-2014 Ben
+Bullock.
 
 You can use, copy, modify and redistribute this package and associated
 files under the Perl Artistic Licence or the GNU General Public
